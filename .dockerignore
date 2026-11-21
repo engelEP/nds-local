@@ -4,6 +4,7 @@
 .openssl-src
 bin
 saves
+data
 **/*.sav
 **/__pycache__
 **/*.pyc

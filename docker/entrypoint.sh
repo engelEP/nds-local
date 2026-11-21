@@ -13,4 +13,5 @@ if [ -z "${ANSWER_IP:-}" ]; then
     exit 1
 fi
 
-exec python3 -m server --bind 0.0.0.0 --answer-ip "$ANSWER_IP"
+exec python3 -m server --bind 0.0.0.0 --answer-ip "$ANSWER_IP" \
+    --database /var/lib/nds-local/nds.sqlite

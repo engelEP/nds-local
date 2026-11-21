@@ -20,6 +20,7 @@ docker build -f docker/Dockerfile -t "$image" .
 docker rm -f "$name" >/dev/null 2>&1 || true
 
 exec docker run --rm --name "$name" \
+    -v nds-local-data:/var/lib/nds-local \
     -p 53:53/udp \
     -p 80:80/tcp \
     -p 443:443/tcp \

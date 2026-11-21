@@ -25,6 +25,7 @@ certs/*.srl
 
 saves/
 *.sav
+data/
 
 .env
 .env.*

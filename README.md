@@ -82,7 +82,7 @@ Two scripts in this directory. Run them from here.
 ./start.sh 192.168.1.243
 ```
 
-Use the line `./console-dns.sh` printed. The script builds the image, then publishes UDP 53, TCP 80, TCP 443, TCP 29900, and UDP 27900 from the container onto that machine and runs it in the foreground. On Windows, allow those ports inbound if the console is another device on the LAN.
+Use the line `./console-dns.sh` printed. The script builds the image, then publishes UDP 53, TCP 80, TCP 443, TCP 29900, and UDP 27900 from the container onto that machine and runs it in the foreground. The named volume `nds-local-data` keeps accounts, profiles, and player records at `/var/lib/nds-local/nds.sqlite`. Removing the container leaves that volume in place. On Windows, allow those ports inbound if the console is another device on the LAN.
 
 Docker runs `ssl/build-proxy.sh` inside the build stage. That script downloads OpenSSL 1.0.2u, checks its SHA-256, builds it with SSLv2 and SSLv3 enabled, links `bin/ds_ssl_proxy`, and checks an SSLv3 handshake with RC4-SHA. The same stage then signs a certificate whose common name is `nas.nintendowifi.net`, using `certs/nwc.crt` and `certs/nwc.key`. The signed files stay in the image. A ready build tags `nds-local:latest`. Unchanged layers stay cached, so a second start does not compile OpenSSL again.
 

@@ -8,7 +8,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-
 DEFAULT_SUFFIXES = (
     "nintendowifi.net",
     "nintendo.net",
@@ -36,6 +35,7 @@ class ServerConfig(BaseModel):
     cert_file: Path = Path("certs/server.chain.crt")
     key_file: Path = Path("certs/server.key")
     ssl_proxy: Path = Path("bin/ds_ssl_proxy")
+    database: Path = Path("data/nds.sqlite")
     dns_suffixes: tuple[str, ...] = DEFAULT_SUFFIXES
 
     @field_validator("bind_host", "answer_ip")
@@ -99,6 +99,12 @@ def parse_args(argv: list[str] | None = None) -> ServerConfig:
         default=Path("bin/ds_ssl_proxy"),
         help="SSLv3 proxy built by ssl/build-proxy.sh.",
     )
+    parser.add_argument(
+        "--database",
+        type=Path,
+        default=Path("data/nds.sqlite"),
+        help="SQLite file for accounts, profiles, and player records.",
+    )
     args = parser.parse_args(argv)
     return ServerConfig(
         bind_host=args.bind,
@@ -109,6 +115,7 @@ def parse_args(argv: list[str] | None = None) -> ServerConfig:
         cert_file=args.cert,
         key_file=args.key,
         ssl_proxy=args.ssl_proxy,
+        database=args.database,
     )
 
 

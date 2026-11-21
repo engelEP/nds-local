@@ -7,16 +7,17 @@ import logging
 import signal
 import threading
 
+from server.config import ServerConfig
+from server.games import load_catalogs
+from server.net.dns import DnsServer, answer_ip_for
+from server.net.http import build_http_server
+from server.net.ssl_proxy import SslProxy, start_ssl_proxy
 from server.services.account.available import AvailableServer
 from server.services.account.nas import NasService
 from server.services.account.presence import PresenceServer
 from server.services.account.sessions import SessionStore
 from server.services.downloads import DownloadService
-from server.games import load_catalogs
-from server.net.dns import DnsServer, answer_ip_for
-from server.net.http import build_http_server
-from server.net.ssl_proxy import SslProxy, start_ssl_proxy
-from server.config import ServerConfig
+from server.services.store import PlayerStore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,13 +27,21 @@ class BindError(RuntimeError):
 
 
 def serve(config: ServerConfig) -> None:
-    sessions = SessionStore()
+    players = PlayerStore(config.database)
+    try:
+        _serve(config, players)
+    finally:
+        players.close()
+
+
+def _serve(config: ServerConfig, players: PlayerStore) -> None:
+    sessions = SessionStore(players)
     nas = NasService(sessions, config.service_host)
     downloads = DownloadService(load_catalogs())
     httpd = _bind_http(config, nas, downloads)
     dns = _bind_dns(config, httpd)
     dns.start()
-    presence = _bind_presence(config, sessions, httpd, dns)
+    presence = _bind_presence(config, sessions, players, httpd, dns)
     presence.start()
     available = _bind_available(config, httpd, dns, presence)
     available.start()
@@ -96,9 +105,15 @@ def _bind_dns(config: ServerConfig, httpd) -> DnsServer:
         raise BindError(_explain("DNS", config.bind_host, config.dns_port, exc)) from exc
 
 
-def _bind_presence(config: ServerConfig, sessions: SessionStore, httpd, dns: DnsServer) -> PresenceServer:
+def _bind_presence(
+    config: ServerConfig,
+    sessions: SessionStore,
+    players: PlayerStore,
+    httpd,
+    dns: DnsServer,
+) -> PresenceServer:
     try:
-        return PresenceServer(config.bind_host, config.presence_port, sessions)
+        return PresenceServer(config.bind_host, config.presence_port, sessions, players)
     except OSError as exc:
         dns.stop()
         dns.join(timeout=2)
@@ -120,7 +135,9 @@ def _bind_available(
         dns.stop()
         dns.join(timeout=2)
         httpd.server_close()
-        raise BindError(_explain("available", config.bind_host, config.available_port, exc)) from exc
+        raise BindError(
+            _explain("available", config.bind_host, config.available_port, exc)
+        ) from exc
 
 
 def _shutdown(httpd, dns: DnsServer, presence: PresenceServer, available: AvailableServer) -> None:

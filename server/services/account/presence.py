@@ -15,6 +15,7 @@ import socket
 import threading
 
 from server.services.account.sessions import SessionStore
+from server.services.store import PlayerStore, Profile
 
 LOGGER = logging.getLogger(__name__)
 
@@ -55,7 +56,10 @@ def _digest(
     proof: bool,
 ) -> str:
     nas_hash = hashlib.md5(nas_challenge.encode("ascii")).hexdigest()
-    left, right = (server_challenge, client_challenge) if proof else (client_challenge, server_challenge)
+    if proof:
+        left, right = server_challenge, client_challenge
+    else:
+        left, right = client_challenge, server_challenge
     material = f"{nas_hash}{' ' * 0x30}{authtoken}{left}{right}{nas_hash}"
     return hashlib.md5(material.encode("ascii")).hexdigest()
 
@@ -112,9 +116,16 @@ def gamespy_message(command: str, value: str, fields: list[tuple[str, str]]) -> 
 class PresenceServer(threading.Thread):
     """TCP listener. One thread per console. ``stop()`` closes the socket."""
 
-    def __init__(self, host: str, port: int, sessions: SessionStore) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        sessions: SessionStore,
+        players: PlayerStore | None = None,
+    ) -> None:
         super().__init__(name="presence", daemon=True)
         self._sessions = sessions
+        self._players = players
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind((host, port))
@@ -141,14 +152,19 @@ class PresenceServer(threading.Thread):
                 return
             worker = threading.Thread(
                 target=_serve_client,
-                args=(conn, peer[0], self._sessions),
+                args=(conn, peer[0], self._sessions, self._players),
                 name="presence-client",
                 daemon=True,
             )
             worker.start()
 
 
-def _serve_client(conn: socket.socket, peer: str, sessions: SessionStore) -> None:
+def _serve_client(
+    conn: socket.socket,
+    peer: str,
+    sessions: SessionStore,
+    players: PlayerStore | None,
+) -> None:
     challenge = "".join(secrets.choice(_CHALLENGE_ALPHABET) for _ in range(10))
     profile: dict[str, str] = {}
     LOGGER.info("Presence connected from %s", peer)
@@ -168,7 +184,7 @@ def _serve_client(conn: socket.socket, peer: str, sessions: SessionStore) -> Non
                 return
             messages, pending = parse_messages(pending)
             for message in messages:
-                if not _handle(conn, peer, sessions, challenge, profile, message):
+                if not _handle(conn, peer, sessions, players, challenge, profile, message):
                     return
     except TimeoutError:
         LOGGER.info("Presence closed %s: idle", peer)
@@ -185,54 +201,61 @@ def _handle(
     conn: socket.socket,
     peer: str,
     sessions: SessionStore,
+    players: PlayerStore | None,
     challenge: str,
     profile: dict[str, str],
     message: dict[str, str],
 ) -> bool:
     command = message.get("__cmd__", "")
-    if command == "login":
-        return _login(conn, peer, sessions, challenge, profile, message)
-    if command == "ka":
-        conn.sendall(gamespy_message("ka", "", []))
-        return True
-    if command == "logout":
-        LOGGER.info("Presence logout %s", peer)
-        return False
-    if command == "updatepro":
-        _remember_profile(profile, message)
-        details = " ".join(
-            f"{key}={value}" for key, value in message.items() if not key.startswith("_")
-        )
-        LOGGER.info("Presence updatepro from %s %s", peer, details)
-        return True
-    if command == "getprofile":
-        LOGGER.info(
-            "Presence getprofile from %s profile=%s lastname=%s",
-            peer,
-            message.get("profileid", profile.get("profileid", "")),
-            profile.get("lastname", ""),
-        )
-        _profile(conn, profile, message)
-        return True
-    if command == "status":
-        LOGGER.info(
-            "Presence status %s stat=%s loc=%s",
-            peer,
-            message.get("statstring", ""),
-            message.get("locstring", ""),
-        )
-        return True
-    details = " ".join(
-        f"{key}={value}" for key, value in message.items() if not key.startswith("_")
-    )
-    LOGGER.info("Presence %s from %s %s", command or "<missing>", peer, details)
-    return True
+    match command:
+        case "login":
+            return _login(conn, peer, sessions, players, challenge, profile, message)
+        case "ka":
+            conn.sendall(gamespy_message("ka", "", []))
+            return True
+        case "logout":
+            LOGGER.info("Presence logout %s", peer)
+            return False
+        case "updatepro":
+            _remember_profile(profile, players, message)
+            LOGGER.info("Presence updatepro from %s %s", peer, _fields(message))
+            return True
+        case "getprofile":
+            LOGGER.info(
+                "Presence getprofile from %s profile=%s lastname=%s",
+                peer,
+                message.get("profileid", profile.get("profileid", "")),
+                profile.get("lastname", ""),
+            )
+            _profile(conn, profile, players, message)
+            return True
+        case "status":
+            LOGGER.info(
+                "Presence status %s stat=%s loc=%s",
+                peer,
+                message.get("statstring", ""),
+                message.get("locstring", ""),
+            )
+            return True
+        case _:
+            LOGGER.info(
+                "Presence %s from %s %s",
+                command or "<missing>",
+                peer,
+                _fields(message),
+            )
+            return True
+
+
+def _fields(message: dict[str, str]) -> str:
+    return " ".join(f"{key}={value}" for key, value in message.items() if not key.startswith("_"))
 
 
 def _login(
     conn: socket.socket,
     peer: str,
     sessions: SessionStore,
+    players: PlayerStore | None,
     challenge: str,
     profile: dict[str, str],
     message: dict[str, str],
@@ -264,7 +287,12 @@ def _login(
             expected,
         )
     proof = generate_proof(challenge, record.challenge, client_challenge, token)
-    profileid = profile_id(record.userid, message.get("profileid", ""))
+    profileid = _assign_profile_id(
+        players,
+        record.userid,
+        record.gamecd,
+        message.get("profileid", ""),
+    )
     uniquenick = f"fe{profileid}"
     profile.clear()
     profile.update(
@@ -306,17 +334,50 @@ def _login(
     return True
 
 
-def _remember_profile(profile: dict[str, str], message: dict[str, str]) -> None:
+def _assign_profile_id(
+    players: PlayerStore | None,
+    userid: str,
+    gamecd: str,
+    requested: str,
+) -> str:
+    """The id the console already saved, or the one stored for this account."""
+    if players is not None and requested == "":
+        stored = players.profile_for(userid, gamecd)
+        if stored is not None:
+            return stored.profileid
+    chosen = profile_id(userid, requested)
+    if players is None:
+        return chosen
+    return players.remember_profile(userid, gamecd, chosen)
+
+
+def _remember_profile(
+    profile: dict[str, str],
+    players: PlayerStore | None,
+    message: dict[str, str],
+) -> None:
+    fields: dict[str, str] = {}
     for key in ("firstname", "lastname", "nick", "uniquenick", "email"):
         value = message.get(key, "")
         if value:
             profile[key] = value
+            fields[key] = value
     partner = message.get("partnerid", "")
     if partner:
         profile["pid"] = partner
+        fields["partnerid"] = partner
+    profileid = profile.get("profileid", "")
+    if players is not None and profileid:
+        players.update_profile(profileid, fields)
 
 
-def _profile(conn: socket.socket, profile: dict[str, str], message: dict[str, str]) -> None:
+def _profile(
+    conn: socket.socket,
+    profile: dict[str, str],
+    players: PlayerStore | None,
+    message: dict[str, str],
+) -> None:
+    profile = _profile_source(profile, players, message)
     uniquenick = profile.get("uniquenick", "fe1")
     fields = [
         ("profileid", message.get("profileid", profile.get("profileid", "1"))),
@@ -340,3 +401,33 @@ def _profile(conn: socket.socket, profile: dict[str, str], message: dict[str, st
         ]
     )
     conn.sendall(gamespy_message("pi", "", fields))
+
+
+def _profile_source(
+    profile: dict[str, str],
+    players: PlayerStore | None,
+    message: dict[str, str],
+) -> dict[str, str]:
+    requested = message.get("profileid", "")
+    local_id = profile.get("profileid", "")
+    if requested == "" or requested == local_id or players is None:
+        return profile
+    stored = players.profile_by_id(requested)
+    if stored is None:
+        return {"profileid": requested, "userid": "", "uniquenick": f"fe{requested}"}
+    return _stored_profile(stored)
+
+
+def _stored_profile(stored: Profile) -> dict[str, str]:
+    fields = {
+        "profileid": stored.profileid,
+        "userid": stored.userid,
+        "nick": stored.nick,
+        "uniquenick": stored.uniquenick or f"fe{stored.profileid}",
+        "email": stored.email,
+        "firstname": stored.firstname,
+        "lastname": stored.lastname,
+    }
+    if stored.partnerid:
+        fields["pid"] = stored.partnerid
+    return fields
