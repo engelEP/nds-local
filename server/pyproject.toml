@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nds-local"
+version = "0.1.0"
+description = "Local server for a Nintendo DS game running in melonDS"
+requires-python = ">=3.15"
+dependencies = ["pydantic>=2.10"]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.13", "ruff>=0.8"]
+
+[tool.setuptools]
+package-dir = { "server" = "." }
+packages = [
+  "server",
+  "server.net",
+  "server.services",
+  "server.services.account",
+  "server.games",
+  "server.games.dq9",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py315"
+src = [".", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.15"
+packages = ["server"]
+mypy_path = ".."
+namespace_packages = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = false
