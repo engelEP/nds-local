@@ -12,6 +12,7 @@ bytes to the port this process already serves.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from server.config import ServerConfig
 LOGGER = logging.getLogger(__name__)
 
 _LISTENING = "SSL proxy listening"
+_IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
 
 @dataclass
@@ -131,9 +133,15 @@ def _relay_stderr(process: subprocess.Popen[str], ready: threading.Event) -> Non
         return
     for line in stream:
         text = line.rstrip("\n")
-        LOGGER.info("%s", text)
         if text.startswith(_LISTENING):
+            LOGGER.info(_LISTENING)
+            LOGGER.debug("%s", text)
             ready.set()
+            continue
+        shown = _IPV4.sub("***", text)
+        LOGGER.info("%s", shown)
+        if shown != text:
+            LOGGER.debug("%s", text)
     ready.set()
 
 

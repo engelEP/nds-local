@@ -110,7 +110,8 @@ def build_response(query: bytes, resolve: Callable[[str], str | None]) -> bytes:
         LOGGER.debug("DNS NXDOMAIN %s", name)
         return header + question
 
-    LOGGER.info("DNS %s -> %s", name, address)
+    LOGGER.info("DNS %s", name)
+    LOGGER.debug("DNS %s -> %s", name, address)
     answer = b"".join(
         (
             _POINTER_TO_QUESTION,
@@ -156,10 +157,12 @@ class DnsServer(threading.Thread):
             try:
                 reply = build_response(payload, self._resolve)
             except DnsError as exc:
-                LOGGER.warning("DNS ignored a packet from %s: %s", peer[0], exc)
+                LOGGER.warning("DNS ignored a packet: %s", exc)
+                LOGGER.debug("DNS ignored a packet from %s", peer[0])
                 continue
             except Exception:
-                LOGGER.exception("DNS failed to answer %s", peer[0])
+                LOGGER.debug("DNS failed to answer %s", peer[0])
+                LOGGER.exception("DNS failed to answer")
                 continue
             try:
                 self._socket.sendto(reply, peer)

@@ -10,6 +10,7 @@ messages keep that XOR on the body and leave ``\\final\\`` in the clear. After
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import socket
 import threading
@@ -87,7 +88,7 @@ def _serve_client(
     gamename = ""
     account_userid = ""
     account_gamecd = ""
-    LOGGER.info("Gamestats connected from %s", peer)
+    LOGGER.debug("Gamestats connected from %s", peer)
     try:
         conn.settimeout(180)
         conn.sendall(challenge_packet())
@@ -100,7 +101,7 @@ def _serve_client(
             message_id = fields.get("id", "1")
             if command == "auth":
                 gamename = fields.get("gamename", "")
-                LOGGER.info("Gamestats auth from %s game=%s", peer, gamename or "?")
+                LOGGER.debug("Gamestats auth from %s game=%s", peer, gamename or "?")
                 sesskey = str(secrets.randbelow(900000000) + 100000000)
                 conn.sendall(_text(f"\\sesskey\\{sesskey}\\id\\{message_id}"))
                 continue
@@ -108,7 +109,7 @@ def _serve_client(
                 account_userid, account_gamecd, profile = _authenticated_profile(
                     players, sessions, fields, gamename
                 )
-                LOGGER.info("Gamestats authp from %s profile=%s", peer, profile)
+                LOGGER.debug("Gamestats authp from %s profile=%s", peer, profile)
                 lid = fields.get("lid", "0")
                 conn.sendall(_text(f"\\pauthr\\{profile}\\lid\\{lid}"))
                 continue
@@ -128,16 +129,18 @@ def _serve_client(
             if command == "getpd":
                 conn.sendall(_load(players, kinds, gamename, fields))
                 continue
-            LOGGER.info("Gamestats %s from %s %s", command or "<missing>", peer, _preview(body))
+            LOGGER.info("Gamestats %s", command or "<missing>")
+            LOGGER.debug("Gamestats %s from %s %s", command or "<missing>", peer, _preview(body))
     except TimeoutError:
-        LOGGER.info("Gamestats closed %s: idle", peer)
+        LOGGER.debug("Gamestats closed %s: idle", peer)
     except OSError as exc:
-        LOGGER.info("Gamestats closed %s: %s", peer, exc.strerror or exc)
+        LOGGER.debug("Gamestats closed %s: %s", peer, exc.strerror or exc)
     except Exception:
-        LOGGER.exception("Gamestats failed for %s", peer)
+        LOGGER.debug("Gamestats failed for %s", peer)
+        LOGGER.exception("Gamestats failed")
     finally:
         conn.close()
-        LOGGER.info("Gamestats disconnected %s", peer)
+        LOGGER.debug("Gamestats disconnected %s", peer)
 
 
 def xor_gamespy(data: bytes) -> bytes:
@@ -303,15 +306,11 @@ def _save(
             payload,
         )
     except ValueError as exc:
-        LOGGER.warning("Gamestats setpd rejected: %s", exc)
+        LOGGER.warning("Gamestats setpd rejected: %s", _rejection(exc))
+        LOGGER.debug("Gamestats setpd rejected: %s", exc)
         return _set_reply(False, lid, pid, modified)
-    LOGGER.info(
-        "Gamestats setpd game=%s profile=%s slot=%s (%d bytes)",
-        gamecd,
-        pid,
-        _slot(fields),
-        len(payload),
-    )
+    LOGGER.info("Gamestats setpd game=%s slot=%s (%d bytes)", gamecd, _slot(fields), len(payload))
+    LOGGER.debug("Gamestats setpd profile=%s", pid)
     return _set_reply(True, lid, pid, modified)
 
 
@@ -334,12 +333,12 @@ def _load(
             modified = found.updated_at
     payload = _filter_pairs(payload, fields.get("keys", ""))
     LOGGER.info(
-        "Gamestats getpd profile=%s slot=%s keys=%s (%d bytes)",
-        pid or "?",
+        "Gamestats getpd slot=%s keys=%s (%d bytes)",
         _slot(fields),
         fields.get("keys", "") or "*",
         len(payload),
     )
+    LOGGER.debug("Gamestats getpd profile=%s", pid or "?")
     head = (
         f"\\getpdr\\1\\lid\\{lid}\\pid\\{pid}\\mod\\{modified}\\length\\{len(payload)}\\data\\"
     ).encode("ascii")
@@ -455,15 +454,27 @@ def _filter_pairs(payload: bytes, keys_field: str) -> bytes:
     return _join_pairs(selected)
 
 
+def _rejection(exc: ValueError) -> str:
+    """The reason a save failed, without the profile id."""
+    text = str(exc)
+    if text.startswith("profile ") and text.endswith(" is not stored"):
+        return "profile is not stored"
+    return text
+
+
 def _set_reply(ok: bool, lid: str, pid: str, modified: int) -> bytes:
     flag = "1" if ok else "0"
     body = f"\\setpdr\\{flag}\\lid\\{lid}\\pid\\{pid}\\mod\\{modified}"
     return _text(body)
 
 
+_SECRET_FIELD = re.compile(r"\\(authtoken|response|proof|password)\\[^\\]*")
+
+
 def _preview(body: bytes) -> str:
     text = body.decode("latin1", errors="replace")
     text = "".join(char if 32 <= ord(char) < 127 else "." for char in text)
+    text = _SECRET_FIELD.sub(r"\\\1\\***", text)
     if len(text) > 180:
         return text[:180] + "..."
     return text

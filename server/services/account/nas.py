@@ -81,5 +81,5 @@ class NasService:
         fields = {"prwords": blanks, "returncd": "000", "datetime": now_stamp()}
         for letter in "ACEJKP":
             fields[f"prwords{letter}"] = blanks
-        LOGGER.info("NAS profanity check, %d words", blanks.count("0") if blanks else 0)
+        LOGGER.debug("NAS profanity check, %d words", blanks.count("0") if blanks else 0)
         return form_body(fields)

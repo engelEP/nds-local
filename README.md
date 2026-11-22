@@ -88,7 +88,7 @@ Run the `./start.sh` line that `./nds-utils.sh` prints. The script builds the im
 
 Docker runs `ssl/build-proxy.sh` inside the build stage. That script downloads OpenSSL 1.0.2u, checks its SHA-256, builds it with SSLv2 and SSLv3 enabled, links `bin/ds_ssl_proxy`, and checks an SSLv3 handshake with RC4-SHA. The same stage then signs a certificate whose common name is `nas.nintendowifi.net`, using `certs/nwc.crt` and `certs/nwc.key`. The signed files stay in the image. A ready build tags `nds-local:latest`. Unchanged layers stay cached, so a second start does not compile OpenSSL again.
 
-A ready server prints `Listening. DNS 0.0.0.0:53, HTTP 0.0.0.0:80, SSL 0.0.0.0:443, presence 0.0.0.0:29900, available 0.0.0.0:27900, gamestats 0.0.0.0:29920`. The line `SSL proxy listening` means the C program has port 443 open. Stop the server with `Ctrl+C`.
+A ready server prints `Listening. DNS 53, HTTP 80, SSL 443, presence 29900, search 29901, available 27900, gamestats 29920`. The line `SSL proxy listening` means the C program has port 443 open. Stop the server with `Ctrl+C`.
 
 TCP 29900 is the GameSpy presence login (`gpcm.gs.nintendowifi.net`). The console opens it after the account step returns. UDP 27900 answers the availability probe (`<game>.available.gs.nintendowifi.net`). TCP 29920 is the player-data store (`<game>.gamestats.gs.nintendowifi.net`), where a game uploads and downloads a record such as a loan unit. A missing probe reply only delays the console; a refused presence connection disconnects it.
 
