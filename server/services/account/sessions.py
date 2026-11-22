@@ -15,6 +15,8 @@ import time
 from dataclasses import dataclass
 from urllib.parse import unquote
 
+from server.db.repository import PlayerStore
+
 
 @dataclass(frozen=True)
 class Session:
@@ -33,15 +35,19 @@ class LoginRecord:
 
 
 class SessionStore:
-    def __init__(self) -> None:
+    def __init__(self, players: PlayerStore | None = None) -> None:
+        self._players = players
         self._lock = threading.Lock()
         self._next_id = 1
         self._logins: dict[str, LoginRecord] = {}
 
     def create_account(self) -> Session:
-        with self._lock:
-            userid = str(self._next_id)
-            self._next_id += 1
+        if self._players is not None:
+            userid = self._players.create_account()
+        else:
+            with self._lock:
+                userid = str(self._next_id)
+                self._next_id += 1
         return Session(userid=userid, token=_token(), challenge=_challenge())
 
     def login(self, userid: str, gamecd: str = "") -> Session:

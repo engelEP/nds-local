@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from server.net.ssl_proxy import backend_host, proxy_command, start_ssl_proxy, unavailable_reason
 from server.config import ServerConfig, parse_args
+from server.net.ssl_proxy import backend_host, proxy_command, start_ssl_proxy, unavailable_reason
 
 
 class SslProxyTests(unittest.TestCase):

@@ -32,7 +32,7 @@ FROM python:3.15.2-slim
 
 WORKDIR /nds-local
 COPY server/ server/
-RUN pip install --no-cache-dir 'pydantic>=2.10'
+RUN pip install --no-cache-dir 'alembic>=1.14' 'pydantic>=2.10' 'sqlalchemy>=2.0.36'
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --from=build /src/bin/ds_ssl_proxy bin/ds_ssl_proxy
 COPY --from=build /src/certs/server.key /src/certs/server.chain.crt certs/
@@ -41,6 +41,6 @@ RUN chmod 755 /usr/local/bin/docker-entrypoint.sh bin/ds_ssl_proxy \
     && chmod 644 certs/server.chain.crt \
     && chmod 600 certs/server.key
 
-EXPOSE 53/udp 80/tcp 443/tcp 29900/tcp 27900/udp
+EXPOSE 53/udp 80/tcp 443/tcp 29900/tcp 29901/tcp 29920/tcp 27900/udp
 
 ENTRYPOINT ["docker-entrypoint.sh"]

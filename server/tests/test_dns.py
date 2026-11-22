@@ -5,7 +5,14 @@ from __future__ import annotations
 import socket
 import unittest
 
-from server.net.dns import DnsError, DnsServer, answer_ip_for, build_response, decode_name, encode_name
+from server.net.dns import (
+    DnsError,
+    DnsServer,
+    answer_ip_for,
+    build_response,
+    decode_name,
+    encode_name,
+)
 
 
 def _query(name: str) -> bytes:
@@ -25,7 +32,8 @@ class DnsMessageTests(unittest.TestCase):
         self.assertEqual(socket.inet_ntoa(reply[-4:]), "10.64.0.1")
 
     def test_other_query_type_for_a_known_name_is_not_nxdomain(self) -> None:
-        query = encode_name("nas.nintendowifi.net") + (28).to_bytes(2, "big") + (1).to_bytes(2, "big")
+        query = encode_name("nas.nintendowifi.net")
+        query += (28).to_bytes(2, "big") + (1).to_bytes(2, "big")
         packet = b"\x12\x34" + b"\x01\x00" + b"\x00\x01" + b"\x00\x00\x00\x00\x00\x00" + query
         reply = build_response(
             packet,

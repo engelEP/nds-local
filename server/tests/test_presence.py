@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import socket
+import tempfile
 import unittest
+from pathlib import Path
 
+from server.db.repository import PlayerStore
 from server.services.account.available import AvailableServer, availability_reply
 from server.services.account.nas import NasService
 from server.services.account.presence import (
     PresenceServer,
+    gamespy_message,
     generate_proof,
     generate_response,
-    gamespy_message,
     parse_messages,
     profile_id,
 )
@@ -89,7 +92,9 @@ class HandshakeTests(unittest.TestCase):
         with socket.create_connection(self.address, timeout=2) as sock:
             sock.settimeout(2)
             challenge = _read_message(sock)["challenge"]
-            response = generate_response(challenge, fields["challenge"], "CLIENTCHAL", fields["token"])
+            response = generate_response(
+                challenge, fields["challenge"], "CLIENTCHAL", fields["token"]
+            )
             sock.sendall(
                 (
                     "\\login\\\\challenge\\CLIENTCHAL\\authtoken\\"
@@ -97,7 +102,8 @@ class HandshakeTests(unittest.TestCase):
                     + "\\response\\"
                     + response
                     + "\\sdkrevision\\3\\id\\1\\final\\"
-                    "\\updatepro\\\\sesskey\\1\\lastname\\000000000YFEE2ml3d1m\\partnerid\\11\\final\\"
+                    "\\updatepro\\\\sesskey\\1\\lastname\\000000000YFEE2ml3d1m"
+                    "\\partnerid\\11\\final\\"
                     "\\getprofile\\\\sesskey\\1\\profileid\\42\\id\\2\\final\\"
                 ).encode("ascii")
             )
@@ -118,6 +124,95 @@ class HandshakeTests(unittest.TestCase):
         self.assertEqual(reply["__cmd__"], "error")
         self.assertEqual(reply["err"], "266")
 
+    def test_stored_profile_is_reused_after_the_file_reopens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nds.sqlite"
+            first_id = _profile_from_fresh_file(path, "4", "YFEP")
+            second_id = _profile_from_fresh_file(path, "4", "YFEP")
+        self.assertEqual(second_id, first_id)
+        self.assertNotEqual(first_id, "")
+
+    def test_getprofile_reads_the_other_console(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            players = PlayerStore(Path(tmp) / "nds.sqlite")
+            sessions = SessionStore(players)
+            nas = NasService(sessions, "dls1.nintendowifi.net")
+            server = PresenceServer("127.0.0.1", 0, sessions, players)
+            server.start()
+            try:
+                _exchange(
+                    nas,
+                    server.address,
+                    "4",
+                    "YFEE",
+                    "42",
+                    b"\\updatepro\\\\sesskey\\1\\lastname\\abel\\partnerid\\11\\id\\1\\final\\"
+                    b"\\ka\\\\final\\",
+                    "ka",
+                )
+                profile = _exchange(
+                    nas,
+                    server.address,
+                    "5",
+                    "YFEE",
+                    "99",
+                    b"\\getprofile\\\\sesskey\\1\\profileid\\42\\id\\2\\final\\",
+                    "pi",
+                )
+            finally:
+                server.stop()
+                server.join(timeout=2)
+                players.close()
+        self.assertEqual(profile["profileid"], "42")
+        self.assertEqual(profile["userid"], "4")
+        self.assertEqual(profile["lastname"], "abel")
+        self.assertEqual(profile["pid"], "11")
+
+    def test_addbuddy_is_listed_on_the_next_login(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            players = PlayerStore(Path(tmp) / "nds.sqlite")
+            players.remember_profile("4", "YFEP", "42")
+            sessions = SessionStore(players)
+            nas = NasService(sessions, "dls1.nintendowifi.net")
+            server = PresenceServer("127.0.0.1", 0, sessions, players)
+            server.start()
+            try:
+                added = _exchange_all(
+                    nas,
+                    server.address,
+                    "4",
+                    "YFEP",
+                    "42",
+                    b"\\addbuddy\\\\sesskey\\1\\newprofileid\\900000001\\reason\\\\final\\",
+                    "bm",
+                )
+                authorized = [
+                    item
+                    for item in added
+                    if item["__cmd__"] == "bm" and item["__cmd_val__"] == "1"
+                ]
+                self.assertEqual(len(authorized), 1)
+                self.assertIn("authorized", authorized[0]["msg"])
+                replies = _login_replies(nas, server.address, "4", "YFEP", "42", until="bm")
+            finally:
+                server.stop()
+                server.join(timeout=2)
+                players.close()
+        listed = [item for item in replies if item["__cmd__"] == "bdy"]
+        self.assertEqual(listed[-1]["__cmd_val__"], "1")
+        self.assertEqual(listed[-1]["list"], "900000001")
+        login_at = next(
+            index
+            for index, item in enumerate(replies)
+            if item["__cmd__"] == "lc" and item["__cmd_val__"] == "2"
+        )
+        authorized_at = next(
+            index
+            for index, item in enumerate(replies)
+            if item["__cmd__"] == "bm" and item["__cmd_val__"] == "1"
+        )
+        self.assertLess(login_at, authorized_at)
+
     def test_keepalive_is_answered(self) -> None:
         with socket.create_connection(self.address, timeout=2) as sock:
             sock.settimeout(2)
@@ -125,6 +220,98 @@ class HandshakeTests(unittest.TestCase):
             sock.sendall(b"\\ka\\\\final\\")
             reply = _read_message(sock)
         self.assertEqual(reply["__cmd__"], "ka")
+
+
+def _profile_from_fresh_file(path: Path, userid: str, gamecd: str) -> str:
+    players = PlayerStore(path)
+    sessions = SessionStore(players)
+    nas = NasService(sessions, "dls1.nintendowifi.net")
+    server = PresenceServer("127.0.0.1", 0, sessions, players)
+    server.start()
+    try:
+        reply = _login(nas, server.address, userid, gamecd, "")
+        return reply["profileid"]
+    finally:
+        server.stop()
+        server.join(timeout=2)
+        players.close()
+
+
+def _login_replies(
+    nas: NasService,
+    address: tuple[str, int],
+    userid: str,
+    gamecd: str,
+    profileid: str,
+    until: str = "lc",
+) -> list[dict[str, str]]:
+    _status, body = nas.handle("/ac", {"action": "login", "userid": userid, "gamecd": gamecd})
+    fields = parse_form(body)
+    with socket.create_connection(address, timeout=2) as sock:
+        sock.settimeout(2)
+        challenge = _read_message(sock)["challenge"]
+        response = generate_response(challenge, fields["challenge"], "CLIENTCHAL", fields["token"])
+        requested = f"\\profileid\\{profileid}" if profileid else ""
+        login = (
+            "\\login\\\\challenge\\CLIENTCHAL\\authtoken\\"
+            + fields["token"]
+            + "\\response\\"
+            + response
+            + requested
+            + "\\gamename\\fireemblemds\\sdkrevision\\3\\id\\1\\final\\"
+        )
+        sock.sendall(login.encode("ascii"))
+        return _read_until(sock, until)
+
+
+def _login(
+    nas: NasService,
+    address: tuple[str, int],
+    userid: str,
+    gamecd: str,
+    profileid: str,
+) -> dict[str, str]:
+    return _exchange(nas, address, userid, gamecd, profileid, b"", "lc")
+
+
+def _exchange(
+    nas: NasService,
+    address: tuple[str, int],
+    userid: str,
+    gamecd: str,
+    profileid: str,
+    follow: bytes,
+    command: str,
+) -> dict[str, str]:
+    return _exchange_all(nas, address, userid, gamecd, profileid, follow, command)[-1]
+
+
+def _exchange_all(
+    nas: NasService,
+    address: tuple[str, int],
+    userid: str,
+    gamecd: str,
+    profileid: str,
+    follow: bytes,
+    command: str,
+) -> list[dict[str, str]]:
+    _status, body = nas.handle("/ac", {"action": "login", "userid": userid, "gamecd": gamecd})
+    fields = parse_form(body)
+    with socket.create_connection(address, timeout=2) as sock:
+        sock.settimeout(2)
+        challenge = _read_message(sock)["challenge"]
+        response = generate_response(challenge, fields["challenge"], "CLIENTCHAL", fields["token"])
+        requested = f"\\profileid\\{profileid}" if profileid else ""
+        login = (
+            "\\login\\\\challenge\\CLIENTCHAL\\authtoken\\"
+            + fields["token"]
+            + "\\response\\"
+            + response
+            + requested
+            + "\\gamename\\fireemblemds\\id\\1\\final\\"
+        )
+        sock.sendall(login.encode("ascii") + follow)
+        return _read_until(sock, command)
 
 
 def _read_until(sock: socket.socket, command: str) -> list[dict[str, str]]:

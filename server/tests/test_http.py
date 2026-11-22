@@ -8,10 +8,15 @@ import unittest
 import urllib.error
 import urllib.request
 
-from server.services.account.nas import NasService
-from server.services.account.sessions import SessionStore, decode_form, decode_nintendo, encode_nintendo
-from server.services.downloads import DownloadService
 from server.net.http import build_http_server, content_length, safe_host
+from server.services.account.nas import NasService
+from server.services.account.sessions import (
+    SessionStore,
+    decode_form,
+    decode_nintendo,
+    encode_nintendo,
+)
+from server.services.downloads import DownloadService
 
 
 class HttpTests(unittest.TestCase):
@@ -20,8 +25,9 @@ class HttpTests(unittest.TestCase):
         self.httpd = build_http_server("127.0.0.1", 0, nas, DownloadService([]))
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
-        host, port = self.httpd.server_address
-        self.base = f"http://{host}:{port}"
+        address = self.httpd.server_address
+        host = address[0].decode("ascii") if isinstance(address[0], bytes) else str(address[0])
+        self.base = f"http://{host}:{address[1]}"
 
     def tearDown(self) -> None:
         self.httpd.shutdown()
@@ -52,15 +58,18 @@ class HttpTests(unittest.TestCase):
         self.assertNotIn("returncd=001", body)
 
     def test_nintendo_base64_download_stays_plain(self) -> None:
-        payload = b"action=" + encode_nintendo("count").encode() + b"&gamecd=" + encode_nintendo("YDQE").encode()
+        action = encode_nintendo("count").encode()
+        game = encode_nintendo("YDQE").encode()
+        payload = b"action=" + action + b"&gamecd=" + game
         request = urllib.request.Request(self.base + "/download", data=payload, method="POST")
         with urllib.request.urlopen(request, timeout=2) as response:
             body = response.read()
         self.assertEqual(body, b"0")
 
     def test_post_without_content_length_is_rejected(self) -> None:
-        host, port = self.httpd.server_address
-        with socket.create_connection((host, port), timeout=2) as sock:
+        address = self.httpd.server_address
+        host = address[0].decode("ascii") if isinstance(address[0], bytes) else str(address[0])
+        with socket.create_connection((host, int(address[1])), timeout=2) as sock:
             sock.sendall(b"POST /ac HTTP/1.0\r\nHost: nas.nintendowifi.net\r\n\r\n")
             data = sock.recv(256)
         self.assertTrue(data.startswith(b"HTTP/1.0 400"), data)

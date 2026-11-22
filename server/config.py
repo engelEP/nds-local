@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import ipaddress
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, field_validator
 
+from server.db.session import to_database_url
 
 DEFAULT_SUFFIXES = (
     "nintendowifi.net",
@@ -31,11 +33,15 @@ class ServerConfig(BaseModel):
     http_port: int = 80
     ssl_port: int = 443
     presence_port: int = 29900
+    search_port: int = 29901
     available_port: int = 27900
+    gamestats_port: int = 29920
     answer_ip: str = "10.64.0.1"
     cert_file: Path = Path("certs/server.chain.crt")
     key_file: Path = Path("certs/server.key")
     ssl_proxy: Path = Path("bin/ds_ssl_proxy")
+    database: Annotated[str, BeforeValidator(to_database_url)] = "sqlite:///data/nds.sqlite"
+    down: bool = False
     dns_suffixes: tuple[str, ...] = DEFAULT_SUFFIXES
 
     @field_validator("bind_host", "answer_ip")
@@ -46,7 +52,15 @@ class ServerConfig(BaseModel):
         except ipaddress.AddressValueError as exc:
             raise ValueError(f"{value} is not an IPv4 address") from exc
 
-    @field_validator("dns_port", "http_port", "ssl_port", "presence_port", "available_port")
+    @field_validator(
+        "dns_port",
+        "http_port",
+        "ssl_port",
+        "presence_port",
+        "search_port",
+        "available_port",
+        "gamestats_port",
+    )
     @classmethod
     def _check_port(cls, value: int) -> int:
         if not 0 <= value <= 65535:
@@ -99,6 +113,19 @@ def parse_args(argv: list[str] | None = None) -> ServerConfig:
         default=Path("bin/ds_ssl_proxy"),
         help="SSLv3 proxy built by ssl/build-proxy.sh.",
     )
+    parser.add_argument(
+        "--down",
+        action="store_true",
+        help="Undo one schema revision and exit.",
+    )
+    parser.add_argument(
+        "--database",
+        default="data/nds.sqlite",
+        help=(
+            "SQLite file path, or a database URL such as "
+            "postgresql+psycopg://user:pass@host:5432/nds."
+        ),
+    )
     args = parser.parse_args(argv)
     return ServerConfig(
         bind_host=args.bind,
@@ -109,6 +136,8 @@ def parse_args(argv: list[str] | None = None) -> ServerConfig:
         cert_file=args.cert,
         key_file=args.key,
         ssl_proxy=args.ssl_proxy,
+        database=args.database,
+        down=args.down,
     )
 
 
