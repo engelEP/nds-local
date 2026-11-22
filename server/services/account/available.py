@@ -62,10 +62,11 @@ class AvailableServer(threading.Thread):
                 return
             parsed = availability_reply(packet)
             if parsed is None:
-                LOGGER.info("Available ignored %d bytes from %s", len(packet), peer[0])
+                LOGGER.debug("Available ignored %d bytes from %s", len(packet), peer[0])
                 continue
             reply, name = parsed
-            LOGGER.info("Available %s from %s", name, peer[0])
+            LOGGER.info("Available %s", name)
+            LOGGER.debug("Available %s from %s", name, peer[0])
             try:
                 self._socket.sendto(reply, peer)
             except OSError:

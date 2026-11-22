@@ -167,7 +167,7 @@ def _serve_client(
 ) -> None:
     challenge = "".join(secrets.choice(_CHALLENGE_ALPHABET) for _ in range(10))
     profile: dict[str, str] = {}
-    LOGGER.info("Presence connected from %s", peer)
+    LOGGER.debug("Presence connected from %s", peer)
     try:
         conn.settimeout(180)
         conn.sendall(
@@ -180,21 +180,23 @@ def _serve_client(
                 return
             pending += chunk.decode("latin1")
             if len(pending) > _MAX_BUFFER:
-                LOGGER.warning("Presence closed %s: message too large", peer)
+                LOGGER.warning("Presence closed: message too large")
+                LOGGER.debug("Presence closed %s: message too large", peer)
                 return
             messages, pending = parse_messages(pending)
             for message in messages:
                 if not _handle(conn, peer, sessions, players, challenge, profile, message):
                     return
     except TimeoutError:
-        LOGGER.info("Presence closed %s: idle", peer)
+        LOGGER.debug("Presence closed %s: idle", peer)
     except OSError as exc:
-        LOGGER.info("Presence closed %s: %s", peer, exc.strerror or exc)
+        LOGGER.debug("Presence closed %s: %s", peer, exc.strerror or exc)
     except Exception:
-        LOGGER.exception("Presence failed for %s", peer)
+        LOGGER.debug("Presence failed for %s", peer)
+        LOGGER.exception("Presence failed")
     finally:
         conn.close()
-        LOGGER.info("Presence disconnected %s", peer)
+        LOGGER.debug("Presence disconnected %s", peer)
 
 
 def _handle(
@@ -214,23 +216,23 @@ def _handle(
             conn.sendall(gamespy_message("ka", "", []))
             return True
         case "logout":
-            LOGGER.info("Presence logout %s", peer)
+            LOGGER.info("Presence logout")
+            LOGGER.debug("Presence logout %s", peer)
             return False
         case "updatepro":
             _remember_profile(profile, players, message)
-            LOGGER.info("Presence updatepro from %s %s", peer, _fields(message))
+            LOGGER.debug("Presence updatepro from %s %s", peer, _fields(message))
             return True
         case "getprofile":
-            LOGGER.info(
-                "Presence getprofile from %s profile=%s lastname=%s",
+            LOGGER.debug(
+                "Presence getprofile from %s profile=%s",
                 peer,
                 message.get("profileid", profile.get("profileid", "")),
-                profile.get("lastname", ""),
             )
             _profile(conn, profile, players, message)
             return True
         case "status":
-            LOGGER.info(
+            LOGGER.debug(
                 "Presence status %s stat=%s loc=%s",
                 peer,
                 message.get("statstring", ""),
@@ -244,12 +246,8 @@ def _handle(
             _remove_buddy(players, profile, message)
             return True
         case _:
-            LOGGER.info(
-                "Presence %s from %s %s",
-                command or "<missing>",
-                peer,
-                _fields(message),
-            )
+            LOGGER.info("Presence %s", command or "<missing>")
+            LOGGER.debug("Presence %s from %s %s", command or "<missing>", peer, _fields(message))
             return True
 
 
@@ -303,10 +301,10 @@ def _add_buddy(
     owner = profile.get("profileid", "")
     friend = _buddy_id(message)
     if players is None or not owner.isdigit() or not friend.isdigit() or friend == owner:
-        LOGGER.info("Presence addbuddy ignored owner=%s friend=%s", owner, friend or "?")
+        LOGGER.debug("Presence addbuddy ignored owner=%s friend=%s", owner, friend or "?")
         return
     players.add_buddy(owner, friend)
-    LOGGER.info("Presence addbuddy %s -> %s", owner, friend)
+    LOGGER.debug("Presence addbuddy %s -> %s", owner, friend)
     friends = _send_buddy_list(conn, players, owner)
     _announce_buddies(conn, friends)
 
@@ -321,11 +319,19 @@ def _remove_buddy(
     if players is None or not owner.isdigit() or not friend.isdigit():
         return
     players.remove_buddy(owner, friend)
-    LOGGER.info("Presence delbuddy %s -> %s", owner, friend)
+    LOGGER.debug("Presence delbuddy %s -> %s", owner, friend)
+
+
+_HIDDEN = frozenset({"authtoken", "response", "challenge", "password", "proof"})
 
 
 def _fields(message: dict[str, str]) -> str:
-    return " ".join(f"{key}={value}" for key, value in message.items() if not key.startswith("_"))
+    shown = (
+        f"{key}={value}"
+        for key, value in message.items()
+        if not key.startswith("_") and key not in _HIDDEN
+    )
+    return " ".join(shown)
 
 
 def _login(
@@ -340,7 +346,8 @@ def _login(
     token = message.get("authtoken", "")
     record = sessions.recall(token)
     if record is None:
-        LOGGER.warning("Presence login from %s rejected: unknown token", peer)
+        LOGGER.warning("Presence login rejected: unknown token")
+        LOGGER.debug("Presence login from %s rejected: unknown token", peer)
         conn.sendall(
             gamespy_message(
                 "error",
@@ -357,12 +364,8 @@ def _login(
     client_challenge = message.get("challenge", "")
     expected = generate_response(challenge, record.challenge, client_challenge, token)
     if message.get("response") != expected:
-        LOGGER.warning(
-            "Presence login from %s: response %s, expected %s",
-            peer,
-            message.get("response", ""),
-            expected,
-        )
+        LOGGER.warning("Presence login: response did not match")
+        LOGGER.debug("Presence login from %s: response did not match", peer)
     proof = generate_proof(challenge, record.challenge, client_challenge, token)
     profileid = _assign_profile_id(
         players,
@@ -401,13 +404,11 @@ def _login(
     )
     _announce_buddies(conn, friends)
     LOGGER.info(
-        "Presence login %s userid=%s profile=%s game=%s sdk=%s",
-        peer,
-        record.userid,
-        profileid,
+        "Presence login game=%s sdk=%s",
         message.get("gamename", record.gamecd or "?"),
         message.get("sdkrevision", "?"),
     )
+    LOGGER.debug("Presence login %s userid=%s profile=%s", peer, record.userid, profileid)
     return True
 
 

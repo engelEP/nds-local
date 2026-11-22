@@ -69,7 +69,7 @@ def others_reply(players: PlayerStore | None, requested: str) -> bytes:
 
 
 def _serve_client(conn: socket.socket, peer: str, players: PlayerStore | None) -> None:
-    LOGGER.info("Search connected from %s", peer)
+    LOGGER.debug("Search connected from %s", peer)
     try:
         conn.settimeout(30)
         pending = ""
@@ -79,21 +79,23 @@ def _serve_client(conn: socket.socket, peer: str, players: PlayerStore | None) -
                 return
             pending += chunk.decode("latin1")
             if len(pending) > _MAX_BUFFER:
-                LOGGER.warning("Search closed %s: message too large", peer)
+                LOGGER.warning("Search closed: message too large")
+                LOGGER.debug("Search closed %s: message too large", peer)
                 return
             messages, pending = parse_messages(pending)
             for message in messages:
                 if not _handle(conn, peer, players, message):
                     return
     except TimeoutError:
-        LOGGER.info("Search closed %s: idle", peer)
+        LOGGER.debug("Search closed %s: idle", peer)
     except OSError as exc:
-        LOGGER.info("Search closed %s: %s", peer, exc.strerror or exc)
+        LOGGER.debug("Search closed %s: %s", peer, exc.strerror or exc)
     except Exception:
-        LOGGER.exception("Search failed for %s", peer)
+        LOGGER.debug("Search failed for %s", peer)
+        LOGGER.exception("Search failed")
     finally:
         conn.close()
-        LOGGER.info("Search disconnected %s", peer)
+        LOGGER.debug("Search disconnected %s", peer)
 
 
 def _handle(
@@ -105,10 +107,12 @@ def _handle(
     command = message.get("__cmd__", "")
     if command == "otherslist":
         requested = message.get("opids", "")
-        LOGGER.info("Search otherslist from %s opids=%s", peer, requested or "?")
+        LOGGER.info("Search otherslist")
+        LOGGER.debug("Search otherslist from %s opids=%s", peer, requested or "?")
         conn.sendall(others_reply(players, requested))
         return False
-    LOGGER.info("Search %s from %s", command or "<missing>", peer)
+    LOGGER.info("Search %s", command or "<missing>")
+    LOGGER.debug("Search %s from %s", command or "<missing>", peer)
     return True
 
 

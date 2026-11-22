@@ -148,7 +148,8 @@ class PlayerStore:
             )
             owner = session.get(ProfileRow, chosen)
             if owner is not None and (owner.userid != uid or owner.gamecd != game):
-                LOGGER.warning(
+                LOGGER.warning("Profile id already belongs to another account")
+                LOGGER.debug(
                     "Profile %s belongs to userid %s; keeping a different id for userid %s",
                     chosen,
                     owner.userid,

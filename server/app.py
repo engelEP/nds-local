@@ -12,7 +12,7 @@ from server.db.repository import PlayerStore
 from server.games import load_catalogs, load_stats_games
 from server.net.dns import DnsServer, answer_ip_for
 from server.net.http import build_http_server
-from server.net.ssl_proxy import SslProxy, start_ssl_proxy
+from server.net.ssl_proxy import start_ssl_proxy
 from server.services.account.available import AvailableServer
 from server.services.account.nas import NasService
 from server.services.account.presence import PresenceServer
@@ -60,23 +60,17 @@ def _serve(config: ServerConfig, players: PlayerStore) -> None:
     previous_term = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     try:
         LOGGER.info(
-            "Listening. DNS %s:%d, HTTP %s:%d, SSL %s, presence %s:%d, "
-            "search %s:%d, available %s:%d, gamestats %s:%d, answers %s",
-            config.bind_host,
+            "Listening. DNS %d, HTTP %d, SSL %s, presence %d, search %d, "
+            "available %d, gamestats %d",
             dns.address[1],
-            config.bind_host,
             httpd.server_address[1],
-            _ssl_where(config, proxy),
-            config.bind_host,
+            "off" if proxy is None else str(config.ssl_port),
             presence.address[1],
-            config.bind_host,
             search.address[1],
-            config.bind_host,
             available.address[1],
-            config.bind_host,
             gamestats.address[1],
-            config.answer_ip,
         )
+        LOGGER.debug("Listening on %s, answers %s", config.bind_host, config.answer_ip)
         httpd.serve_forever()
     except KeyboardInterrupt:
         LOGGER.info("Stopping")
@@ -89,12 +83,6 @@ def _serve(config: ServerConfig, players: PlayerStore) -> None:
 
 def _raise_keyboard_interrupt(_signum: int, _frame: object) -> None:
     raise KeyboardInterrupt
-
-
-def _ssl_where(config: ServerConfig, proxy: SslProxy | None) -> str:
-    if proxy is None:
-        return "off"
-    return f"{config.bind_host}:{config.ssl_port}"
 
 
 def _bind_http(config: ServerConfig, nas: NasService, downloads: DownloadService):
