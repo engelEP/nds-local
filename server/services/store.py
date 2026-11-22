@@ -8,6 +8,7 @@ stay on disk.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import sqlite3
 import threading
@@ -20,6 +21,7 @@ LOGGER = logging.getLogger(__name__)
 _MAX_PAYLOAD = 256 * 1024
 _MAX_LABEL = 128
 _MAX_KEY = 32
+_PROFILE_MAX = 0x7FFFFFFF
 _PROFILE_FIELDS = ("firstname", "lastname", "nick", "uniquenick", "email", "partnerid")
 
 
@@ -44,6 +46,7 @@ class Record:
     slot: str
     label: str
     payload: bytes
+    updated_at: int = 0
 
 
 class PlayerStore:
@@ -62,6 +65,12 @@ class PlayerStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    def apply_script(self, script: str) -> None:
+        """Run a seed script and commit it."""
+        with self._lock:
+            self._conn.executescript(script)
+            self._conn.commit()
 
     def create_account(self) -> str:
         """The next userid. Reopening the file continues the sequence."""
@@ -121,16 +130,15 @@ class PlayerStore:
             ).fetchone()
             if owner is not None and (int(owner["userid"]) != uid or owner["gamecd"] != game):
                 LOGGER.warning(
-                    "Profile %s belongs to userid %s; keeping the id for userid %s",
+                    "Profile %s belongs to userid %s; keeping a different id for userid %s",
                     pid,
                     owner["userid"],
                     uid,
                 )
-                if current is None:
-                    self._conn.rollback()
-                    return profileid
-                pid = int(current["profileid"])
-            nick = _key(f"fe{pid}", limit=32)
+                if current is not None:
+                    pid = int(current["profileid"])
+                else:
+                    pid = self._unused_profile_id()
             if current is None:
                 self._conn.execute(
                     """
@@ -138,16 +146,16 @@ class PlayerStore:
                         profileid, userid, gamecd, uniquenick, updated_at
                     ) VALUES (?, ?, ?, ?, ?)
                     """,
-                    (pid, uid, game, nick, now),
+                    (pid, uid, game, _key(f"fe{pid}", limit=32), now),
                 )
             else:
                 self._conn.execute(
                     """
                     UPDATE profiles
-                    SET profileid = ?, uniquenick = ?, updated_at = ?
+                    SET profileid = ?, updated_at = ?
                     WHERE userid = ? AND gamecd = ?
                     """,
-                    (pid, nick, now, uid, game),
+                    (pid, now, uid, game),
                 )
             self._conn.commit()
             return str(pid)
@@ -181,7 +189,7 @@ class PlayerStore:
         slot: str,
         label: str,
         payload: bytes,
-    ) -> None:
+    ) -> int:
         if len(payload) > _MAX_PAYLOAD:
             raise ValueError(f"record is larger than {_MAX_PAYLOAD} bytes")
         if not owner_profileid.isdigit():
@@ -218,6 +226,7 @@ class PlayerStore:
                 self._conn.rollback()
                 raise ValueError(f"profile {owner_profileid} is not stored") from exc
             self._conn.commit()
+            return now
 
     def list_records(self, gamecd: str, kind: str) -> list[Record]:
         with self._lock:
@@ -258,6 +267,58 @@ class PlayerStore:
             self._conn.commit()
             return cursor.rowcount > 0
 
+    def add_buddy(self, owner: str, friend: str) -> None:
+        """Remember that one profile lists another as a friend."""
+        if not owner.isdigit() or not friend.isdigit() or owner == friend:
+            return
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO buddies (owner_profileid, friend_profileid)
+                VALUES (?, ?)
+                """,
+                (int(owner), int(friend)),
+            )
+            self._conn.commit()
+
+    def remove_buddy(self, owner: str, friend: str) -> None:
+        if not owner.isdigit() or not friend.isdigit():
+            return
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM buddies WHERE owner_profileid = ? AND friend_profileid = ?",
+                (int(owner), int(friend)),
+            )
+            self._conn.commit()
+
+    def list_buddies(self, owner: str) -> list[str]:
+        if not owner.isdigit():
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT friend_profileid FROM buddies
+                WHERE owner_profileid = ?
+                ORDER BY friend_profileid
+                """,
+                (int(owner),),
+            ).fetchall()
+        return [str(row["friend_profileid"]) for row in rows]
+
+    def _unused_profile_id(self) -> int:
+        """A profile id in the range the console can store, not used yet."""
+        seed = int.from_bytes(hashlib.md5(str(time.time_ns()).encode()).digest()[:4], "big")
+        candidate = seed & _PROFILE_MAX or 1
+        for _ in range(1024):
+            taken = self._conn.execute(
+                "SELECT 1 FROM profiles WHERE profileid = ?",
+                (candidate,),
+            ).fetchone()
+            if taken is None:
+                return candidate
+            candidate = candidate + 1 if candidate < _PROFILE_MAX else 1
+        raise ValueError("no free profile id")
+
     def _ensure_account(self, userid: int, now: int) -> None:
         self._conn.execute(
             "INSERT OR IGNORE INTO accounts (userid, created_at) VALUES (?, ?)",
@@ -296,6 +357,11 @@ class PlayerStore:
                 updated_at INTEGER NOT NULL,
                 UNIQUE (gamecd, kind, owner_profileid, slot)
             );
+            CREATE TABLE IF NOT EXISTS buddies (
+                owner_profileid INTEGER NOT NULL,
+                friend_profileid INTEGER NOT NULL,
+                PRIMARY KEY (owner_profileid, friend_profileid)
+            );
             """
         )
         self._conn.commit()
@@ -329,4 +395,5 @@ def _record(row: sqlite3.Row) -> Record:
         slot=row["slot"],
         label=row["label"],
         payload=bytes(payload),
+        updated_at=int(row["updated_at"]),
     )

@@ -8,15 +8,19 @@ import signal
 import threading
 
 from server.config import ServerConfig
-from server.games import load_catalogs
+from server.games import load_catalogs, load_stats_games
+from server.games import load_seeds as load_game_seeds
 from server.net.dns import DnsServer, answer_ip_for
 from server.net.http import build_http_server
 from server.net.ssl_proxy import SslProxy, start_ssl_proxy
+from server.seed import load_seeds as load_common_seeds
 from server.services.account.available import AvailableServer
 from server.services.account.nas import NasService
 from server.services.account.presence import PresenceServer
+from server.services.account.search import SearchServer
 from server.services.account.sessions import SessionStore
 from server.services.downloads import DownloadService
+from server.services.gamestats import GamestatsServer
 from server.services.store import PlayerStore
 
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +32,8 @@ class BindError(RuntimeError):
 
 def serve(config: ServerConfig) -> None:
     players = PlayerStore(config.database)
+    for script in (*load_common_seeds(), *load_game_seeds()):
+        players.apply_script(script)
     try:
         _serve(config, players)
     finally:
@@ -43,8 +49,14 @@ def _serve(config: ServerConfig, players: PlayerStore) -> None:
     dns.start()
     presence = _bind_presence(config, sessions, players, httpd, dns)
     presence.start()
-    available = _bind_available(config, httpd, dns, presence)
+    search = _bind_search(config, players, httpd, dns, presence)
+    search.start()
+    available = _bind_available(config, httpd, dns, presence, search)
     available.start()
+    gamestats = _bind_gamestats(
+        config, sessions, players, httpd, dns, presence, search, available
+    )
+    gamestats.start()
     proxy = start_ssl_proxy(config)
     # SIGINT already raises KeyboardInterrupt. SIGTERM (kill, WSL, a service
     # manager) would otherwise skip this finally and leave the port-443 process.
@@ -52,7 +64,8 @@ def _serve(config: ServerConfig, players: PlayerStore) -> None:
     previous_term = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     try:
         LOGGER.info(
-            "Listening. DNS %s:%d, HTTP %s:%d, SSL %s, presence %s:%d, available %s:%d, answers %s",
+            "Listening. DNS %s:%d, HTTP %s:%d, SSL %s, presence %s:%d, "
+            "search %s:%d, available %s:%d, gamestats %s:%d, answers %s",
             config.bind_host,
             dns.address[1],
             config.bind_host,
@@ -61,7 +74,11 @@ def _serve(config: ServerConfig, players: PlayerStore) -> None:
             config.bind_host,
             presence.address[1],
             config.bind_host,
+            search.address[1],
+            config.bind_host,
             available.address[1],
+            config.bind_host,
+            gamestats.address[1],
             config.answer_ip,
         )
         httpd.serve_forever()
@@ -71,7 +88,7 @@ def _serve(config: ServerConfig, players: PlayerStore) -> None:
         signal.signal(signal.SIGTERM, previous_term)
         if proxy is not None:
             proxy.stop()
-        _shutdown(httpd, dns, presence, available)
+        _shutdown(httpd, dns, presence, search, available, gamestats)
 
 
 def _raise_keyboard_interrupt(_signum: int, _frame: object) -> None:
@@ -121,15 +138,36 @@ def _bind_presence(
         raise BindError(_explain("presence", config.bind_host, config.presence_port, exc)) from exc
 
 
+def _bind_search(
+    config: ServerConfig,
+    players: PlayerStore,
+    httpd,
+    dns: DnsServer,
+    presence: PresenceServer,
+) -> SearchServer:
+    try:
+        return SearchServer(config.bind_host, config.search_port, players)
+    except OSError as exc:
+        presence.stop()
+        presence.join(timeout=2)
+        dns.stop()
+        dns.join(timeout=2)
+        httpd.server_close()
+        raise BindError(_explain("search", config.bind_host, config.search_port, exc)) from exc
+
+
 def _bind_available(
     config: ServerConfig,
     httpd,
     dns: DnsServer,
     presence: PresenceServer,
+    search: SearchServer,
 ) -> AvailableServer:
     try:
         return AvailableServer(config.bind_host, config.available_port)
     except OSError as exc:
+        search.stop()
+        search.join(timeout=2)
         presence.stop()
         presence.join(timeout=2)
         dns.stop()
@@ -140,13 +178,57 @@ def _bind_available(
         ) from exc
 
 
-def _shutdown(httpd, dns: DnsServer, presence: PresenceServer, available: AvailableServer) -> None:
+def _bind_gamestats(
+    config: ServerConfig,
+    sessions: SessionStore,
+    players: PlayerStore,
+    httpd,
+    dns: DnsServer,
+    presence: PresenceServer,
+    search: SearchServer,
+    available: AvailableServer,
+) -> GamestatsServer:
+    try:
+        return GamestatsServer(
+            config.bind_host,
+            config.gamestats_port,
+            players,
+            sessions,
+            load_stats_games(),
+        )
+    except OSError as exc:
+        available.stop()
+        available.join(timeout=2)
+        search.stop()
+        search.join(timeout=2)
+        presence.stop()
+        presence.join(timeout=2)
+        dns.stop()
+        dns.join(timeout=2)
+        httpd.server_close()
+        raise BindError(
+            _explain("gamestats", config.bind_host, config.gamestats_port, exc)
+        ) from exc
+
+
+def _shutdown(
+    httpd,
+    dns: DnsServer,
+    presence: PresenceServer,
+    search: SearchServer,
+    available: AvailableServer,
+    gamestats: GamestatsServer,
+) -> None:
     stopper = threading.Thread(target=httpd.shutdown, daemon=True)
     stopper.start()
+    gamestats.stop()
     available.stop()
+    search.stop()
     presence.stop()
     dns.stop()
+    gamestats.join(timeout=2)
     available.join(timeout=2)
+    search.join(timeout=2)
     presence.join(timeout=2)
     dns.join(timeout=2)
     stopper.join(timeout=2)

@@ -17,10 +17,12 @@ package-dir = { "server" = "." }
 packages = [
   "server",
   "server.net",
+  "server.seed",
   "server.services",
   "server.services.account",
   "server.games",
   "server.games.dq9",
+  "server.games.fe11",
 ]
 
 [tool.ruff]

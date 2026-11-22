@@ -25,6 +25,8 @@ exec docker run --rm --name "$name" \
     -p 80:80/tcp \
     -p 443:443/tcp \
     -p 29900:29900/tcp \
+    -p 29901:29901/tcp \
+    -p 29920:29920/tcp \
     -p 27900:27900/udp \
     -e ANSWER_IP="$answer_ip" \
     "$image"

@@ -28,7 +28,7 @@ class ServerStopTests(unittest.TestCase):
             "from server.config import ServerConfig\n"
             "from server.app import serve\n"
             "serve(ServerConfig(bind_host='127.0.0.1', dns_port=0, http_port=0, "
-            "ssl_port=9, presence_port=0, available_port=0, "
+            "ssl_port=9, presence_port=0, search_port=0, available_port=0, gamestats_port=0, "
             "ssl_proxy=Path('missing/ds_ssl_proxy'), "
             f"database=Path({database!r})))\n"
         )

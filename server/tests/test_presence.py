@@ -168,6 +168,52 @@ class HandshakeTests(unittest.TestCase):
         self.assertEqual(profile["lastname"], "abel")
         self.assertEqual(profile["pid"], "11")
 
+    def test_addbuddy_is_listed_on_the_next_login(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            players = PlayerStore(Path(tmp) / "nds.sqlite")
+            players.remember_profile("4", "YFEP", "42")
+            players.remember_profile("9", "YFEP", "900000001")
+            sessions = SessionStore(players)
+            nas = NasService(sessions, "dls1.nintendowifi.net")
+            server = PresenceServer("127.0.0.1", 0, sessions, players)
+            server.start()
+            try:
+                added = _exchange_all(
+                    nas,
+                    server.address,
+                    "4",
+                    "YFEP",
+                    "42",
+                    b"\\addbuddy\\\\sesskey\\1\\newprofileid\\900000001\\reason\\\\final\\",
+                    "bm",
+                )
+                authorized = [
+                    item
+                    for item in added
+                    if item["__cmd__"] == "bm" and item["__cmd_val__"] == "1"
+                ]
+                self.assertEqual(len(authorized), 1)
+                self.assertIn("authorized", authorized[0]["msg"])
+                replies = _login_replies(nas, server.address, "4", "YFEP", "42", until="bm")
+            finally:
+                server.stop()
+                server.join(timeout=2)
+                players.close()
+        listed = [item for item in replies if item["__cmd__"] == "bdy"]
+        self.assertEqual(listed[-1]["__cmd_val__"], "1")
+        self.assertEqual(listed[-1]["list"], "900000001")
+        login_at = next(
+            index
+            for index, item in enumerate(replies)
+            if item["__cmd__"] == "lc" and item["__cmd_val__"] == "2"
+        )
+        authorized_at = next(
+            index
+            for index, item in enumerate(replies)
+            if item["__cmd__"] == "bm" and item["__cmd_val__"] == "1"
+        )
+        self.assertLess(login_at, authorized_at)
+
     def test_keepalive_is_answered(self) -> None:
         with socket.create_connection(self.address, timeout=2) as sock:
             sock.settimeout(2)
@@ -192,6 +238,33 @@ def _profile_from_fresh_file(path: Path, userid: str, gamecd: str) -> str:
         players.close()
 
 
+def _login_replies(
+    nas: NasService,
+    address: tuple[str, int],
+    userid: str,
+    gamecd: str,
+    profileid: str,
+    until: str = "lc",
+) -> list[dict[str, str]]:
+    _status, body = nas.handle("/ac", {"action": "login", "userid": userid, "gamecd": gamecd})
+    fields = parse_form(body)
+    with socket.create_connection(address, timeout=2) as sock:
+        sock.settimeout(2)
+        challenge = _read_message(sock)["challenge"]
+        response = generate_response(challenge, fields["challenge"], "CLIENTCHAL", fields["token"])
+        requested = f"\\profileid\\{profileid}" if profileid else ""
+        login = (
+            "\\login\\\\challenge\\CLIENTCHAL\\authtoken\\"
+            + fields["token"]
+            + "\\response\\"
+            + response
+            + requested
+            + "\\gamename\\fireemblemds\\sdkrevision\\3\\id\\1\\final\\"
+        )
+        sock.sendall(login.encode("ascii"))
+        return _read_until(sock, until)
+
+
 def _login(
     nas: NasService,
     address: tuple[str, int],
@@ -211,6 +284,18 @@ def _exchange(
     follow: bytes,
     command: str,
 ) -> dict[str, str]:
+    return _exchange_all(nas, address, userid, gamecd, profileid, follow, command)[-1]
+
+
+def _exchange_all(
+    nas: NasService,
+    address: tuple[str, int],
+    userid: str,
+    gamecd: str,
+    profileid: str,
+    follow: bytes,
+    command: str,
+) -> list[dict[str, str]]:
     _status, body = nas.handle("/ac", {"action": "login", "userid": userid, "gamecd": gamecd})
     fields = parse_form(body)
     with socket.create_connection(address, timeout=2) as sock:
@@ -227,7 +312,7 @@ def _exchange(
             + "\\gamename\\fireemblemds\\id\\1\\final\\"
         )
         sock.sendall(login.encode("ascii") + follow)
-        return _read_until(sock, command)[-1]
+        return _read_until(sock, command)
 
 
 def _read_until(sock: socket.socket, command: str) -> list[dict[str, str]]:

@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from server.services.downloads import DownloadService
 from server.games.dq9 import DragonQuest9Catalog, shop_week
+from server.services.downloads import DownloadService
 
 
 class DownloadTests(unittest.TestCase):
@@ -72,7 +72,10 @@ class DownloadTests(unittest.TestCase):
             (folder / "mes.bin").write_bytes(b"news-" + shop)
         epoch = 1279267200
         week = 7 * 24 * 60 * 60
-        service = DownloadService([DragonQuest9Catalog(root, clock=lambda: float(epoch + week + 10))])
+        def clock() -> float:
+            return float(epoch + week + 10)
+
+        service = DownloadService([DragonQuest9Catalog(root, clock=clock)])
 
         status, _headers, body = service.handle(
             {"action": "contents", "gamecd": "YDQE", "contents": "auction.bin"}

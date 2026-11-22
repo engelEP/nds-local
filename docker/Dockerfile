@@ -41,6 +41,6 @@ RUN chmod 755 /usr/local/bin/docker-entrypoint.sh bin/ds_ssl_proxy \
     && chmod 644 certs/server.chain.crt \
     && chmod 600 certs/server.key
 
-EXPOSE 53/udp 80/tcp 443/tcp 29900/tcp 27900/udp
+EXPOSE 53/udp 80/tcp 443/tcp 29900/tcp 29901/tcp 29920/tcp 27900/udp
 
 ENTRYPOINT ["docker-entrypoint.sh"]

@@ -237,6 +237,12 @@ def _handle(
                 message.get("locstring", ""),
             )
             return True
+        case "addbuddy":
+            _add_buddy(conn, players, profile, message)
+            return True
+        case "delbuddy":
+            _remove_buddy(players, profile, message)
+            return True
         case _:
             LOGGER.info(
                 "Presence %s from %s %s",
@@ -245,6 +251,77 @@ def _handle(
                 _fields(message),
             )
             return True
+
+
+# The cart keeps a new code gray until this exact reply arrives. It is the
+# other player accepting the request, which a one-console test cannot send.
+_AUTHORIZE = "I have authorized your request to add me to your list"
+
+
+def _send_buddy_list(conn: socket.socket, players: PlayerStore | None, owner: str) -> list[str]:
+    """The block and friend lists. Status arrives only after login is finished."""
+    friends = players.list_buddies(owner) if players is not None else []
+    conn.sendall(gamespy_message("blk", "0", [("list", "")]))
+    conn.sendall(gamespy_message("bdy", str(len(friends)), [("list", ",".join(friends))]))
+    return friends
+
+
+def _announce_buddies(conn: socket.socket, friends: list[str]) -> None:
+    for friend in friends:
+        _buddy_authorized(conn, friend)
+        _buddy_status(conn, friend)
+
+
+def _buddy_authorized(conn: socket.socket, friend: str) -> None:
+    conn.sendall(gamespy_message("bm", "1", [("f", friend), ("msg", _AUTHORIZE)]))
+
+
+def _buddy_status(conn: socket.socket, friend: str) -> None:
+    conn.sendall(
+        gamespy_message(
+            "bm",
+            "100",
+            [("f", friend), ("msg", "|s|1|ss|Online|ls||ip|0|p|0|qm|0")],
+        )
+    )
+
+
+def _buddy_id(message: dict[str, str]) -> str:
+    for key in ("newprofileid", "delprofileid", "profileid", "buddy"):
+        value = message.get(key, "")
+        if value.isdigit():
+            return value
+    return ""
+
+
+def _add_buddy(
+    conn: socket.socket,
+    players: PlayerStore | None,
+    profile: dict[str, str],
+    message: dict[str, str],
+) -> None:
+    owner = profile.get("profileid", "")
+    friend = _buddy_id(message)
+    if players is None or not owner.isdigit() or not friend.isdigit() or friend == owner:
+        LOGGER.info("Presence addbuddy ignored owner=%s friend=%s", owner, friend or "?")
+        return
+    players.add_buddy(owner, friend)
+    LOGGER.info("Presence addbuddy %s -> %s", owner, friend)
+    friends = _send_buddy_list(conn, players, owner)
+    _announce_buddies(conn, friends)
+
+
+def _remove_buddy(
+    players: PlayerStore | None,
+    profile: dict[str, str],
+    message: dict[str, str],
+) -> None:
+    owner = profile.get("profileid", "")
+    friend = _buddy_id(message)
+    if players is None or not owner.isdigit() or not friend.isdigit():
+        return
+    players.remove_buddy(owner, friend)
+    LOGGER.info("Presence delbuddy %s -> %s", owner, friend)
 
 
 def _fields(message: dict[str, str]) -> str:
@@ -304,10 +381,9 @@ def _login(
         }
     )
     sesskey = str(secrets.randbelow(900000000) + 100000000)
-    # SDK 11 reads the buddy lists before it accepts the login reply.
-    if message.get("sdkrevision") == "11":
-        conn.sendall(gamespy_message("blk", "0", [("list", "")]))
-        conn.sendall(gamespy_message("bdy", "0", [("list", "")]))
+    # The console reads the friend list before it accepts the login reply.
+    # Authorization is a later message: sending it first makes SDK 3 drop the session.
+    friends = _send_buddy_list(conn, players, profileid)
     conn.sendall(
         gamespy_message(
             "lc",
@@ -323,6 +399,7 @@ def _login(
             ],
         )
     )
+    _announce_buddies(conn, friends)
     LOGGER.info(
         "Presence login %s userid=%s profile=%s game=%s sdk=%s",
         peer,

@@ -30,7 +30,9 @@ class ServerConfig(BaseModel):
     http_port: int = 80
     ssl_port: int = 443
     presence_port: int = 29900
+    search_port: int = 29901
     available_port: int = 27900
+    gamestats_port: int = 29920
     answer_ip: str = "10.64.0.1"
     cert_file: Path = Path("certs/server.chain.crt")
     key_file: Path = Path("certs/server.key")
@@ -46,7 +48,15 @@ class ServerConfig(BaseModel):
         except ipaddress.AddressValueError as exc:
             raise ValueError(f"{value} is not an IPv4 address") from exc
 
-    @field_validator("dns_port", "http_port", "ssl_port", "presence_port", "available_port")
+    @field_validator(
+        "dns_port",
+        "http_port",
+        "ssl_port",
+        "presence_port",
+        "search_port",
+        "available_port",
+        "gamestats_port",
+    )
     @classmethod
     def _check_port(cls, value: int) -> int:
         if not 0 <= value <= 65535:
