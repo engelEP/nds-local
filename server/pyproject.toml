@@ -7,7 +7,7 @@ name = "nds-local"
 version = "0.1.0"
 description = "Local server for a Nintendo DS game running in melonDS"
 requires-python = ">=3.15"
-dependencies = ["pydantic>=2.10"]
+dependencies = ["alembic>=1.14", "pydantic>=2.10", "sqlalchemy>=2.0.36"]
 
 [project.optional-dependencies]
 dev = ["mypy>=1.13", "ruff>=0.8"]
@@ -16,6 +16,7 @@ dev = ["mypy>=1.13", "ruff>=0.8"]
 package-dir = { "server" = "." }
 packages = [
   "server",
+  "server.db",
   "server.net",
   "server.seed",
   "server.services",
@@ -23,6 +24,8 @@ packages = [
   "server.games",
   "server.games.dq9",
   "server.games.fe11",
+  "server.migrations",
+  "server.migrations.versions",
 ]
 
 [tool.ruff]

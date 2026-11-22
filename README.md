@@ -2,17 +2,19 @@
 
 Local server for a Nintendo DS game running in melonDS. The phone runs the game. A computer on the same Wi-Fi runs this server and answers the connection check, the account step, and the download. Each game is a catalog under `server/games/`. Another game is a new catalog beside the ones already there, not a change to DNS or HTTP.
 
+Stand-in friend code: `103979215105`.
+
 The server runs in Docker. `./start.sh` builds the image and then runs it. That build compiles a private OpenSSL 1.0.2, links the SSLv3 proxy, and signs the certificate the console accepts. Docker reuses cached layers when those files have not changed.
 
 Python serves DNS and clear HTTP. The console's account step is SSLv3 with RC4 on port 443, and its ClientHello still uses the SSLv2 record shape. Current system OpenSSL no longer speaks that, so the image builds OpenSSL 1.0.2 inside the container. Python does not link that library: it starts the built program and hands it the decrypted HTTP.
 
 ## What each part is for
 
-Run `./console-dns.sh` and `./start.sh` from this directory.
+Run `./nds-utils.sh` and `./start.sh` from this directory.
 
 | Path | What it does |
 | --- | --- |
-| `console-dns.sh` | Prints the `./start.sh` line for the IPv4 the router has assigned right now. That address goes in both DNS fields on the console. |
+| `nds-utils.sh` | With no arguments, prints the `./start.sh` line for the IPv4 the router has assigned right now. `./nds-utils.sh --down` undoes one database revision. `./nds-utils.sh -h` lists both. |
 | `start.sh` | Builds the image, then runs it. Publishes UDP 53, TCP 80, TCP 443, TCP 29900, and UDP 27900, and passes the console's address as `ANSWER_IP`. |
 | `docker/Dockerfile` | Two stages. The first compiles the proxy and signs the certificate. The second keeps Python, the proxy, and the signed certificate. `.dockerignore` stays at the project root, next to the build context. |
 | `docker/entrypoint.sh` | Starts `python3 -m server` inside the container. |
@@ -70,11 +72,11 @@ Python and the C program do not share memory or an SSL library. The link is a ch
 Two scripts in this directory. Run them from here.
 
 ```sh
-./console-dns.sh
+./nds-utils.sh
 ./start.sh 192.168.1.243
 ```
 
-`./console-dns.sh` reads the IPv4 the router assigned to Windows and prints only the start line, for example `./start.sh 192.168.1.243`. That address is the one to pass to `./start.sh`, and the same address goes in both DNS fields on the console. Run `./console-dns.sh` again when the router hands out a new address.
+`./nds-utils.sh` reads the IPv4 the router assigned to Windows and prints only the start line, for example `./start.sh 192.168.1.243`. That address is the one to pass to `./start.sh`, and the same address goes in both DNS fields on the console. Run `./nds-utils.sh` again when the router hands out a new address. `./nds-utils.sh --down` stops the server if it is running and undoes one schema revision in the `nds-local-data` volume. `./nds-utils.sh -h` prints examples of both.
 
 ### Start the server
 
@@ -82,7 +84,7 @@ Two scripts in this directory. Run them from here.
 ./start.sh 192.168.1.243
 ```
 
-Use the line `./console-dns.sh` printed. The script builds the image, then publishes UDP 53, TCP 80, TCP 443, TCP 29900, TCP 29920, and UDP 27900 from the container onto that machine and runs it in the foreground. The named volume `nds-local-data` keeps accounts, profiles, and player records at `/var/lib/nds-local/nds.sqlite`. Removing the container leaves that volume in place. On Windows, allow those ports inbound if the console is another device on the LAN.
+Run the `./start.sh` line that `./nds-utils.sh` prints. The script builds the image, then publishes UDP 53, TCP 80, TCP 443, TCP 29900, TCP 29920, and UDP 27900 from the container onto that machine and runs it in the foreground. The named volume `nds-local-data` keeps accounts, profiles, and player records at `/var/lib/nds-local/nds.sqlite`. Removing the container leaves that volume in place. On Windows, allow those ports inbound if the console is another device on the LAN.
 
 Docker runs `ssl/build-proxy.sh` inside the build stage. That script downloads OpenSSL 1.0.2u, checks its SHA-256, builds it with SSLv2 and SSLv3 enabled, links `bin/ds_ssl_proxy`, and checks an SSLv3 handshake with RC4-SHA. The same stage then signs a certificate whose common name is `nas.nintendowifi.net`, using `certs/nwc.crt` and `certs/nwc.key`. The signed files stay in the image. A ready build tags `nds-local:latest`. Unchanged layers stay cached, so a second start does not compile OpenSSL again.
 
@@ -107,7 +109,7 @@ With the built-in firmware:
 1. Choose Nintendo Wi-Fi Connection Settings.
 2. Open Connection 1 and scroll to the bottom.
 3. Set Auto-obtain DNS to No.
-4. Primary DNS and Secondary DNS: the address in the line printed by `./console-dns.sh`.
+4. Primary DNS and Secondary DNS: the address in the line printed by `./nds-utils.sh`.
 5. Run Test Connection.
 
 With your own firmware dump:
@@ -138,10 +140,13 @@ The server imports every such package on startup. DNS and the HTTP routes stay a
 
 `server/` holds the Python API: the package, its tests, and `pyproject.toml`. Pydantic is the settings model. mypy and Ruff are configured in that file. `ssl/` and `certs/` stay at the project root because the image build needs them.
 
+The database layer lives in `server/db/`. `models.py` holds the tables, `session.py` opens the engine and runs Alembic, and `repository.py` reads and writes accounts, profiles, and records. `alembic.ini` at the project root points at `server/migrations/`. That folder is named `migrations` so it does not shadow the Alembic library. Opening the database migrates from code, up to `0001_initial`. A file created before Alembic is stamped at that revision so its rows stay. Seeds run after that migration. `seed/*.sql` inserts the stand-in profile, and `seed/fe11_loan_units.py` inserts the four loan units. Those rows are catalog data, so a later edit changes the seed and does not add a revision. `./nds-utils.sh --down` undoes the schema revision and drops the tables.
+
 ```text
 nds-local/
+  alembic.ini               Alembic CLI config
   .dockerignore
-  console-dns.sh            address for the console DNS fields
+  nds-utils.sh                    console DNS address, or one migration down
   start.sh                  builds the image, then runs it
   docker/
     Dockerfile
@@ -151,6 +156,16 @@ nds-local/
     check.sh                ruff, mypy, and tests
     config.py               pydantic settings
     app.py                  composition root
+    db/
+      models.py             SQLAlchemy models
+      session.py            engine, migrate, downgrade
+      repository.py         accounts, profiles, records
+    migrations/
+      env.py                Alembic environment
+      versions/             schema revisions (0001_initial)
+    seed/
+      profile.sql           stand-in account and profile
+      fe11_loan_units.py    four YFEP loan units
     net/
     services/
       account/

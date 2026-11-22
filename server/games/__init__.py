@@ -43,17 +43,6 @@ def load_catalogs() -> list[GameCatalog]:
     return catalogs
 
 
-def load_seeds() -> list[str]:
-    """SQL shipped with a game package, applied when the database opens."""
-    scripts: list[str] = []
-    for _module, path in _packages():
-        seed = path / "seed.sql"
-        if seed.is_file():
-            scripts.append(seed.read_text(encoding="utf-8"))
-            LOGGER.info("Loaded seed %s", path.name)
-    return scripts
-
-
 def load_stats_games() -> dict[str, str]:
     """Map each registered ``gamename`` to the record kind it stores."""
     kinds: dict[str, str] = {}

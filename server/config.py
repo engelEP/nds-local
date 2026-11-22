@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import ipaddress
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, field_validator
+
+from server.db.session import to_database_url
 
 DEFAULT_SUFFIXES = (
     "nintendowifi.net",
@@ -37,7 +40,8 @@ class ServerConfig(BaseModel):
     cert_file: Path = Path("certs/server.chain.crt")
     key_file: Path = Path("certs/server.key")
     ssl_proxy: Path = Path("bin/ds_ssl_proxy")
-    database: Path = Path("data/nds.sqlite")
+    database: Annotated[str, BeforeValidator(to_database_url)] = "sqlite:///data/nds.sqlite"
+    down: bool = False
     dns_suffixes: tuple[str, ...] = DEFAULT_SUFFIXES
 
     @field_validator("bind_host", "answer_ip")
@@ -110,10 +114,17 @@ def parse_args(argv: list[str] | None = None) -> ServerConfig:
         help="SSLv3 proxy built by ssl/build-proxy.sh.",
     )
     parser.add_argument(
+        "--down",
+        action="store_true",
+        help="Undo one schema revision and exit.",
+    )
+    parser.add_argument(
         "--database",
-        type=Path,
-        default=Path("data/nds.sqlite"),
-        help="SQLite file for accounts, profiles, and player records.",
+        default="data/nds.sqlite",
+        help=(
+            "SQLite file path, or a database URL such as "
+            "postgresql+psycopg://user:pass@host:5432/nds."
+        ),
     )
     args = parser.parse_args(argv)
     return ServerConfig(
@@ -126,6 +137,7 @@ def parse_args(argv: list[str] | None = None) -> ServerConfig:
         key_file=args.key,
         ssl_proxy=args.ssl_proxy,
         database=args.database,
+        down=args.down,
     )
 
 

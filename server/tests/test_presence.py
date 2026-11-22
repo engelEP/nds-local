@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from server.db.repository import PlayerStore
 from server.services.account.available import AvailableServer, availability_reply
 from server.services.account.nas import NasService
 from server.services.account.presence import (
@@ -18,7 +19,6 @@ from server.services.account.presence import (
     profile_id,
 )
 from server.services.account.sessions import SessionStore, parse_form
-from server.services.store import PlayerStore
 
 
 class ProofTests(unittest.TestCase):
@@ -172,7 +172,6 @@ class HandshakeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             players = PlayerStore(Path(tmp) / "nds.sqlite")
             players.remember_profile("4", "YFEP", "42")
-            players.remember_profile("9", "YFEP", "900000001")
             sessions = SessionStore(players)
             nas = NasService(sessions, "dls1.nintendowifi.net")
             server = PresenceServer("127.0.0.1", 0, sessions, players)

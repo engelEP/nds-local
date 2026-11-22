@@ -7,10 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from server.db.repository import PlayerStore
 from server.games.fe11 import load_stats
 from server.services.account.sessions import SessionStore
 from server.services.gamestats import GamestatsServer, encode_message, xor_gamespy
-from server.services.store import PlayerStore
 
 _FINAL = b"\\final\\"
 

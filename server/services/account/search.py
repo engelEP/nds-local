@@ -11,8 +11,8 @@ import logging
 import socket
 import threading
 
+from server.db.repository import PlayerStore
 from server.services.account.presence import gamespy_message, parse_messages
-from server.services.store import PlayerStore
 
 LOGGER = logging.getLogger(__name__)
 

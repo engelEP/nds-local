@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from server.db.repository import PlayerStore
 from server.services.account.presence import parse_messages
 from server.services.account.search import SearchServer, others_reply
-from server.services.store import PlayerStore
 
 
 class OthersReplyTests(unittest.TestCase):
@@ -18,7 +18,6 @@ class OthersReplyTests(unittest.TestCase):
             players = PlayerStore(Path(tmp) / "nds.sqlite")
             try:
                 players.remember_profile("4", "YFEP", "42")
-                players.remember_profile("9", "YFEP", "900000001")
                 reply = others_reply(players, "900000001|42|0")
             finally:
                 players.close()
@@ -32,7 +31,6 @@ class OthersReplyTests(unittest.TestCase):
     def test_a_live_query_is_answered_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             players = PlayerStore(Path(tmp) / "nds.sqlite")
-            players.remember_profile("9", "YFEP", "900000001")
             server = SearchServer("127.0.0.1", 0, players)
             server.start()
             try:

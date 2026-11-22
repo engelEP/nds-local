@@ -1,15 +1,16 @@
-"""Accounts, profiles, and player records in the SQLite file."""
+"""Accounts, profiles, and player records."""
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from server.games import load_seeds as load_game_seeds
-from server.seed import load_seeds as load_common_seeds
+from server.config import ServerConfig
+from server.db.repository import PlayerStore
+from server.db.session import NoRevision, downgrade_database, to_database_url
 from server.services.account.sessions import SessionStore
-from server.services.store import PlayerStore
 
 
 class AccountTests(unittest.TestCase):
@@ -24,8 +25,8 @@ class AccountTests(unittest.TestCase):
                 continued = SessionStore(second).create_account().userid
             finally:
                 second.close()
-        self.assertEqual(opened, "1")
-        self.assertEqual(continued, "2")
+        self.assertEqual(opened, "900000002")
+        self.assertEqual(continued, "900000003")
 
 
 class ProfileTests(unittest.TestCase):
@@ -99,33 +100,14 @@ class RecordTests(unittest.TestCase):
         self.assertIsNone(self.store.get_record("YFEE", "loan_unit", "42", "0"))
         self.assertFalse(self.store.delete_record("YFEE", "loan_unit", "42", "0"))
 
-    def test_seeds_install_a_clean_profile_and_the_registered_unit(self) -> None:
-        registered = bytes.fromhex(
-            "5c72656e74616c30305c41515141426741444177414642514942414959423841414141"
-            "4377424c414757414867414141414858686341416a414941414141414141414141414141"
-            "51414174414d41414141414151424952614d7759686a454d4f55306146474a5761516778"
-            "53544e52535a4a523032444847684e426a6d7157536339374632434a4d51733554434a55"
-            "515931716c556d5155644636324743494f51306f7951464f63516f4c57626b4d4f556f77"
-            "796a6b4c4f70563569426d5161684a535330464c514931777943475155553169546e6b48"
-            "47494d7079314a4a655551307a5948456563557a6a47655237592e456935334d74733632"
-            "5559314c6c512e6d5459395534554d435230324d6e67362d55615a50727043566a6f6454"
-            "39704b4e447237546f347032553471495a5a4b537956744a5777706d6a37635274744b50"
-            "6c66534c5251327555726154706c47305448365668492e5a41796d46412a2a00"
-        )
-        fresh = PlayerStore(Path(self._tmp.name) / "empty.sqlite")
+    def test_the_mock_profile_offers_four_loan_units(self) -> None:
+        fresh = PlayerStore(Path(self._tmp.name) / "catalog.sqlite")
         try:
-            for script in load_common_seeds():
-                fresh.apply_script(script)
-            self.assertIsNone(fresh.get_record("YFEP", "loan_unit", "900000001", "3:0"))
             fresh.remember_profile("4", "YFEP", "42")
             fresh.put_record("YFEP", "loan_unit", "42", "0", "Abel", b"unit-a")
-            fresh.put_record("YFEP", "loan_unit", "900000001", "3:0", "mock", b"edited")
-            for script in (*load_common_seeds(), *load_game_seeds()):
-                fresh.apply_script(script)
-                fresh.apply_script(script)
-            profile = fresh.profile_for("900000001", "YFEP")
             unit = fresh.get_record("YFEP", "loan_unit", "900000001", "3:0")
             kept = fresh.get_record("YFEP", "loan_unit", "42", "0")
+            profile = fresh.profile_for("900000001", "YFEP")
             buddies = fresh.list_buddies("900000001")
         finally:
             fresh.close()
@@ -135,7 +117,10 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(profile.nick, "")
         self.assertIsNotNone(unit)
         assert unit is not None
-        self.assertEqual(unit.payload, registered)
+        text = unit.payload.decode("latin1")
+        for key in ("rental00", "rental01", "rental02", "rental03"):
+            self.assertIn(f"\\{key}\\", text)
+        self.assertNotIn("\\rental04\\", text)
         assert kept is not None
         self.assertEqual(kept.payload, b"unit-a")
         self.assertEqual(buddies, [])
@@ -143,6 +128,147 @@ class RecordTests(unittest.TestCase):
     def test_oversized_payload_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self.store.put_record("YFEE", "loan_unit", "42", "0", "Abel", b"x" * (256 * 1024 + 1))
+
+    def test_an_existing_file_is_stamped_and_keeps_its_rows(self) -> None:
+        path = Path(self._tmp.name) / "legacy.sqlite"
+        connection = sqlite3.connect(path)
+        connection.executescript(
+            """
+            CREATE TABLE accounts (
+                userid INTEGER PRIMARY KEY,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE profiles (
+                profileid INTEGER PRIMARY KEY,
+                userid INTEGER NOT NULL REFERENCES accounts(userid),
+                gamecd TEXT NOT NULL,
+                uniquenick TEXT NOT NULL DEFAULT '',
+                lastname TEXT NOT NULL DEFAULT '',
+                firstname TEXT NOT NULL DEFAULT '',
+                nick TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                partnerid TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL,
+                UNIQUE (userid, gamecd)
+            );
+            CREATE TABLE records (
+                id INTEGER PRIMARY KEY,
+                gamecd TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                owner_profileid INTEGER NOT NULL REFERENCES profiles(profileid)
+                    ON UPDATE CASCADE,
+                slot TEXT NOT NULL DEFAULT '',
+                label TEXT NOT NULL DEFAULT '',
+                payload BLOB NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE (gamecd, kind, owner_profileid, slot)
+            );
+            CREATE TABLE buddies (
+                owner_profileid INTEGER NOT NULL,
+                friend_profileid INTEGER NOT NULL,
+                PRIMARY KEY (owner_profileid, friend_profileid)
+            );
+            INSERT INTO accounts (userid, created_at) VALUES (4, 10);
+            INSERT INTO profiles (
+                profileid, userid, gamecd, uniquenick, updated_at
+            ) VALUES (42, 4, 'YFEP', 'fe42', 10);
+            """
+        )
+        connection.commit()
+        connection.close()
+        opened = PlayerStore(path)
+        try:
+            profile = opened.profile_for("4", "YFEP")
+        finally:
+            opened.close()
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile.profileid, "42")
+        stamped = sqlite3.connect(path)
+        try:
+            revision = stamped.execute("SELECT version_num FROM alembic_version").fetchone()
+        finally:
+            stamped.close()
+        assert revision is not None
+        self.assertEqual(revision[0], "0001_initial")
+
+    def test_down_removes_the_tables(self) -> None:
+        path = Path(self._tmp.name) / "down.sqlite"
+        store = PlayerStore(path)
+        store.close()
+        downgrade_database(path)
+        connection = sqlite3.connect(path)
+        try:
+            rows = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            names = {row[0] for row in rows}
+        finally:
+            connection.close()
+        self.assertNotIn("accounts", names)
+        self.assertNotIn("profiles", names)
+        self.assertNotIn("records", names)
+
+    def test_a_retired_catalog_revision_returns_to_the_schema(self) -> None:
+        path = Path(self._tmp.name) / "retired.sqlite"
+        store = PlayerStore(path)
+        store.close()
+        _stamp(path, "0002_fe11_loan_units")
+        opened = PlayerStore(path)
+        try:
+            unit = opened.get_record("YFEP", "loan_unit", "900000001", "3:0")
+        finally:
+            opened.close()
+        self.assertIsNotNone(unit)
+        self.assertEqual(_revision(path), "0001_initial")
+        held = Path(self._tmp.name) / "held.sqlite"
+        held_store = PlayerStore(held)
+        held_store.close()
+        _stamp(held, "0002_fe11_loan_units")
+        with self.assertRaises(NoRevision):
+            downgrade_database(held)
+        self.assertEqual(_revision(held), "0001_initial")
+        connection = sqlite3.connect(held)
+        try:
+            names = {
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+        finally:
+            connection.close()
+        self.assertIn("records", names)
+
+    def test_down_without_a_file_does_not_create_one(self) -> None:
+        path = Path(self._tmp.name) / "missing.sqlite"
+        with self.assertRaises(NoRevision):
+            downgrade_database(path)
+        self.assertFalse(path.exists())
+
+
+def _stamp(path: Path, revision: str) -> None:
+    connection = sqlite3.connect(path)
+    connection.execute("UPDATE alembic_version SET version_num = ?", (revision,))
+    connection.commit()
+    connection.close()
+
+
+def _revision(path: Path) -> str:
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    return str(row[0])
+
+
+class DatabaseUrlTests(unittest.TestCase):
+    def test_a_path_or_a_postgres_url_is_accepted(self) -> None:
+        self.assertEqual(to_database_url(Path("/tmp/nds.sqlite")), "sqlite:////tmp/nds.sqlite")
+        file_config = ServerConfig(database="/tmp/nds.sqlite")
+        self.assertEqual(file_config.database, "sqlite:////tmp/nds.sqlite")
+        url = "postgresql+psycopg://nds:secret@db:5432/nds"
+        remote = ServerConfig(database=url)
+        self.assertEqual(remote.database, url)
 
 
 if __name__ == "__main__":

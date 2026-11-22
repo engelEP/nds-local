@@ -8,12 +8,11 @@ import signal
 import threading
 
 from server.config import ServerConfig
+from server.db.repository import PlayerStore
 from server.games import load_catalogs, load_stats_games
-from server.games import load_seeds as load_game_seeds
 from server.net.dns import DnsServer, answer_ip_for
 from server.net.http import build_http_server
 from server.net.ssl_proxy import SslProxy, start_ssl_proxy
-from server.seed import load_seeds as load_common_seeds
 from server.services.account.available import AvailableServer
 from server.services.account.nas import NasService
 from server.services.account.presence import PresenceServer
@@ -21,7 +20,6 @@ from server.services.account.search import SearchServer
 from server.services.account.sessions import SessionStore
 from server.services.downloads import DownloadService
 from server.services.gamestats import GamestatsServer
-from server.services.store import PlayerStore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,8 +30,6 @@ class BindError(RuntimeError):
 
 def serve(config: ServerConfig) -> None:
     players = PlayerStore(config.database)
-    for script in (*load_common_seeds(), *load_game_seeds()):
-        players.apply_script(script)
     try:
         _serve(config, players)
     finally:

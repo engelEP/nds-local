@@ -14,8 +14,8 @@ import secrets
 import socket
 import threading
 
+from server.db.repository import PlayerStore, Profile
 from server.services.account.sessions import SessionStore
-from server.services.store import PlayerStore, Profile
 
 LOGGER = logging.getLogger(__name__)
 

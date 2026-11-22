@@ -15,9 +15,9 @@ import socket
 import threading
 import time
 
+from server.db.repository import PlayerStore
 from server.services.account.presence import profile_id
 from server.services.account.sessions import SessionStore
-from server.services.store import PlayerStore
 
 LOGGER = logging.getLogger(__name__)
 

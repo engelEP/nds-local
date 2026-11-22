@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from urllib.parse import unquote
 
-from server.services.store import PlayerStore
+from server.db.repository import PlayerStore
 
 
 @dataclass(frozen=True)
